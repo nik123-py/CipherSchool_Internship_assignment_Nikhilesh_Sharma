@@ -2,6 +2,7 @@
   "name": "lld-practice-platform",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "A focused practice platform for Low-Level Design: attempt a problem, submit a structured design, get criterion-based explainable feedback, and try again.",
   "engines": {
     "node": ">=22.5.0"
