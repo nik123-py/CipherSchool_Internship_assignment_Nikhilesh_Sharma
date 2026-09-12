@@ -1,0 +1,29 @@
+{
+  "name": "lld-practice-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A focused practice platform for Low-Level Design: attempt a problem, submit a structured design, get criterion-based explainable feedback, and try again.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "seed": "npm run seed --workspace server",
+    "test": "npm run test --workspace server",
+    "test:watch": "npm run test:watch --workspace server",
+    "build": "npm run build --workspace server && npm run build --workspace web",
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
+    "start": "npm run start --workspace server",
+    "docs:pdf": "node scripts/build-docs.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "marked": "^12.0.2"
+  }
+}
