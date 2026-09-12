@@ -1,14 +1,7 @@
 ﻿{
-  "installCommand": "npm install",
   "buildCommand": "npm run build:vercel",
   "outputDirectory": "web/dist",
-  "functions": {
-    "api/index.ts": {
-      "maxDuration": 60
-    }
-  },
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index" },
     { "source": "/:path*", "destination": "/index.html" }
   ]
 }
