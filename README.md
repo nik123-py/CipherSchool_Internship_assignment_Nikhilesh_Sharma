@@ -231,9 +231,11 @@ Environment variables to set:
 
 | Variable | Value | Why |
 | --- | --- | --- |
-| `PERSISTENCE` | `memory` | A function has no writable shared disk |
+| `PERSISTENCE` | `sqlite` | Real adapter; falls back to memory if `node:sqlite` is missing |
+| `DATABASE_PATH` | `/tmp/lld.db` | The only writable path a function has, private to one instance |
+| `AWAIT_EVALUATIONS` | `true` | Implied by `VERCEL`; explicit so the environment reads honestly |
 | `EVALUATOR` | `llm` or `auto` | |
-| `ANTHROPIC_API_KEY` | your key | |
+| `ANTHROPIC_API_KEY` | your key | Set `ANTHROPIC_BASE_URL` too if the key is for a proxy |
 | `LLM_TIMEOUT_MS` | `45000` | Must stay under the function's 60s `maxDuration` |
 | `DEMO_EVALUATION_DELAY_MS` | `0` | No artificial delay in production |
 
@@ -249,9 +251,9 @@ configuration rather than as a second code path, and neither is free:
   already sees `COMPLETED`. An evaluation slower than `maxDuration` is lost rather than
   retryable.
 - *Attempt state is per-instance.* The problem catalogue is seeded from code, so it is
-  complete everywhere, but attempts and their feedback live in one instance's memory. A
-  learner whose next request lands on a fresh instance sees that attempt gone. History is
-  therefore a demo of the feature, not a durable record.
+  complete everywhere, but `/tmp` belongs to one instance and is gone when that instance
+  is recycled. A learner whose next request lands on a fresh instance sees that attempt
+  gone. History is therefore a demo of the feature, not a durable record.
 
 Both disappear on a long-running host: `npm start` with the default `PERSISTENCE=sqlite`
 gives durable attempts and background evaluation, which is what the application was
