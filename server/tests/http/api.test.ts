@@ -37,7 +37,16 @@ describe('HTTP API', () => {
   });
 
   it('reports health and the active evaluation mode', async () => {
-    await request(api.app).get('/api/health').expect(200).expect({ status: 'ok', pendingEvaluations: 0 });
+    const health = await request(api.app).get('/api/health').expect(200);
+    expect(health.body).toMatchObject({
+      status: 'ok',
+      pendingEvaluations: 0,
+      evaluator: 'heuristic',
+      evaluationsAwaited: false,
+    });
+    // The deployment shape is part of the health contract: a hosted instance
+    // running on the in-memory fallback has to be visible without shell access.
+    expect(health.body.persistence).toMatchObject({ kind: 'sqlite', durable: false });
 
     const config = await request(api.app).get('/api/config').expect(200);
     expect(config.body.evaluation.kind).toBeDefined();
@@ -219,5 +228,59 @@ describe('HTTP API', () => {
   it('404s unknown endpoints as JSON, not HTML', async () => {
     const response = await request(api.app).get('/api/does-not-exist').expect(404);
     expect(response.body.error.code).toBe('NOT_FOUND');
+  });
+});
+
+/**
+ * The serverless wiring, which is the same application with two host
+ * constraints applied: no disk, and no work after the response. Both are
+ * configuration, so this suite asserts they are honoured rather than that a
+ * second code path exists.
+ */
+describe('HTTP API on a serverless host', () => {
+  function buildServerlessApi(): { app: express.Express; container: Container } {
+    const config = {
+      ...loadConfig({ PERSISTENCE: 'memory', AWAIT_EVALUATIONS: 'true', EVALUATOR: 'heuristic' }),
+      demoEvaluationDelayMs: 0,
+    };
+    const container = buildContainer(config, {
+      ids: new SequentialIds(),
+      evaluators: [new HeuristicEvaluator()],
+      onEvaluationError: () => {},
+    });
+    return { app: createApp(container), container };
+  }
+
+  it('runs without node:sqlite and says so on /api/health', async () => {
+    const serverless = buildServerlessApi();
+    const health = await request(serverless.app).get('/api/health').expect(200);
+    expect(health.body.persistence).toMatchObject({ kind: 'memory', durable: false });
+    expect(health.body.evaluationsAwaited).toBe(true);
+
+    // The catalogue is seeded from code, so it is complete on every instance.
+    const problems = await request(serverless.app).get('/api/problems').set(LEARNER).expect(200);
+    expect(problems.body.problems).toHaveLength(4);
+    serverless.container.close();
+  });
+
+  it('finishes the evaluation before responding, so no poll is needed', async () => {
+    const serverless = buildServerlessApi();
+    const created = await request(serverless.app).post('/api/attempts').set(LEARNER).send({ problemId: 'elevator' });
+    const attemptId = created.body.attempt.id;
+
+    const submitted = await request(serverless.app)
+      .post(`/api/attempts/${attemptId}/submission`)
+      .set(LEARNER)
+      .send({ sections: STRONG_SUBMISSION })
+      .expect(202);
+    expect(submitted.body.attempt.status).toBe('COMPLETED');
+
+    // No `settled()` call in between: the feedback is readable immediately.
+    const evaluation = await request(serverless.app)
+      .get(`/api/attempts/${attemptId}/evaluation`)
+      .set(LEARNER)
+      .expect(200);
+    expect(evaluation.body.evaluation.criteria).toHaveLength(8);
+    serverless.container.close();
   });
 });

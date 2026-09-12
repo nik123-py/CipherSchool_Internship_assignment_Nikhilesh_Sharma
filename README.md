@@ -40,7 +40,7 @@ the banner in the UI.
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Server + web together, with reload |
-| `npm test` | 103 tests (domain, application, evaluators, HTTP) |
+| `npm test` | 105 tests (domain, application, evaluators, HTTP) |
 | `npm run typecheck` | Type checks both workspaces |
 | `npm run build` | Type check + production web bundle |
 | `npm run seed` | Writes the built-in problems into the database |
@@ -207,11 +207,57 @@ Every value is optional; see [.env.example](.env.example).
 | `LLM_TIMEOUT_MS` | `60000` | Then the attempt is `FAILED` and retryable |
 | `PORT` | `4000` | |
 | `DATABASE_PATH` | `data/lld-practice.db` | `:memory:` is supported |
+| `PERSISTENCE` | `sqlite` | `memory` runs the same app on the in-memory repositories |
+| `AWAIT_EVALUATIONS` | on when `VERCEL` is set | Finish the evaluation before answering the submit request |
 | `DEMO_EVALUATION_DELAY_MS` | `1200` | Makes the status transitions visible when demoing |
 | `WEB_ORIGIN` | `http://localhost:5173` | CORS origin for the API |
 
 `EVALUATOR=llm` refuses to boot without a key rather than silently degrading — a demo
 that quietly stops using the model is worse than one that will not start.
+
+---
+
+## Deployment (Vercel)
+
+One Vercel project serves both halves from one origin: the Vite build is the static
+output, and the whole Express app runs behind a single serverless function at
+[api/index.ts](api/index.ts), routed there by the `/api/(.*)` rewrite in
+[vercel.json](vercel.json). No CORS, no API base URL.
+
+Project settings that matter — **Root Directory must be the repository root**, not `web/`;
+everything else (install, build, output, function limits) comes from `vercel.json`.
+
+Environment variables to set:
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `PERSISTENCE` | `memory` | A function has no writable shared disk |
+| `EVALUATOR` | `llm` or `auto` | |
+| `ANTHROPIC_API_KEY` | your key | |
+| `LLM_TIMEOUT_MS` | `45000` | Must stay under the function's 60s `maxDuration` |
+| `DEMO_EVALUATION_DELAY_MS` | `0` | No artificial delay in production |
+
+`GET /api/health` reports which persistence adapter is live and whether evaluations are
+being awaited, so the deployed shape is checkable without shell access.
+
+**What the serverless host costs, stated plainly.** Two host constraints are handled as
+configuration rather than as a second code path, and neither is free:
+
+- *Evaluations are awaited.* The instance is frozen the moment it responds, so work
+  started after the response never finishes. `AWAIT_EVALUATIONS` makes the submit request
+  wait for the evaluator; the client's contract is unchanged, its first poll simply
+  already sees `COMPLETED`. An evaluation slower than `maxDuration` is lost rather than
+  retryable.
+- *Attempt state is per-instance.* The problem catalogue is seeded from code, so it is
+  complete everywhere, but attempts and their feedback live in one instance's memory. A
+  learner whose next request lands on a fresh instance sees that attempt gone. History is
+  therefore a demo of the feature, not a durable record.
+
+Both disappear on a long-running host: `npm start` with the default `PERSISTENCE=sqlite`
+gives durable attempts and background evaluation, which is what the application was
+designed for. Making them disappear on Vercel means a hosted database behind the existing
+`AttemptRepository` / `EvaluationRepository` ports — a new adapter in
+[composition-root.ts](server/src/composition-root.ts), and nothing above it.
 
 ---
 

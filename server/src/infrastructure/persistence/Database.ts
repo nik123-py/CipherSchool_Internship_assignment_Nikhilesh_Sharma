@@ -7,10 +7,30 @@ import { dirname } from 'node:path';
 // bundlers (Vitest/Vite included) still strip the `node:` prefix for this
 // module and then fail to find it, because it is only exposed under the
 // prefixed name. `createRequire` sidesteps that without a build plugin.
-const nodeRequire = createRequire(import.meta.url);
-const { DatabaseSync: SqliteDatabase } = nodeRequire('node:sqlite') as {
-  DatabaseSync: new (path: string) => DatabaseSync;
-};
+//
+// The lookup is lazy, and that is load-bearing rather than tidiness: on a
+// runtime where the module is missing (a Node build without it, or one that
+// still hides it behind --experimental-sqlite) resolving at import time would
+// take down every caller of this file, including a host that asked for the
+// in-memory repositories and never wanted SQLite at all. Deferring it turns
+// that into a catchable error at the one place that opens a database.
+type SqliteConstructor = new (path: string) => DatabaseSync;
+let cached: SqliteConstructor | undefined;
+
+function sqliteConstructor(): SqliteConstructor {
+  if (cached) return cached;
+  const nodeRequire = createRequire(import.meta.url);
+  try {
+    cached = (nodeRequire('node:sqlite') as { DatabaseSync: SqliteConstructor }).DatabaseSync;
+  } catch (error) {
+    throw new Error(
+      'node:sqlite is not available in this Node runtime (it needs Node >= 22.5, and some ' +
+        'builds require --experimental-sqlite). Set PERSISTENCE=memory to run without it. ' +
+        `Original error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return cached;
+}
 
 /**
  * SQLite via Node's built-in `node:sqlite` (Node >= 22.5).
@@ -20,6 +40,7 @@ const { DatabaseSync: SqliteDatabase } = nodeRequire('node:sqlite') as {
  * toolchain. The cost is a Node version floor, which is documented in README.
  */
 export function openDatabase(path: string): DatabaseSync {
+  const SqliteDatabase = sqliteConstructor();
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new SqliteDatabase(path);
   db.exec('PRAGMA journal_mode = WAL;');

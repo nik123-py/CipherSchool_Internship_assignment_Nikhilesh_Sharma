@@ -29,6 +29,16 @@ export function createApp(container: Container) {
   app.use(cors({ origin: true }));
   app.use(express.json({ limit: '256kb' }));
 
+  /**
+   * Express 4 only catches synchronous throws, so async handlers hand their
+   * rejection to `next` explicitly and keep using the same error mapper below.
+   */
+  const route =
+    (handler: (req: Request, res: Response) => Promise<void>) =>
+    (req: Request, res: Response, next: NextFunction): void => {
+      handler(req, res).catch(next);
+    };
+
   const learnerOf = (req: Request): string => {
     const header = req.header('x-learner-id')?.trim();
     return header && header.length <= 64 ? header : 'demo-learner';
@@ -44,7 +54,19 @@ export function createApp(container: Container) {
   };
 
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', pendingEvaluations: container.coordinator.pendingCount });
+    res.json({
+      status: 'ok',
+      pendingEvaluations: container.coordinator.pendingCount,
+      evaluator: container.evaluationMode.kind,
+      // Deployment shape is the first thing to check when a hosted instance
+      // misbehaves, so it is readable without shell access to the host.
+      persistence: {
+        kind: container.persistenceMode.kind,
+        durable: container.persistenceMode.durable,
+        reason: container.persistenceMode.reason,
+      },
+      evaluationsAwaited: container.awaitEvaluations,
+    });
   });
 
   /** Everything the client needs to render itself: mode, rubric, form schema. */
@@ -112,17 +134,32 @@ export function createApp(container: Container) {
   });
 
   /**
-   * Submit. Returns 202: the submission is durable, the evaluation is not done.
-   * The client polls `GET /api/attempts/:id` for the status transition.
+   * Submit. Normally returns 202: the submission is durable, the evaluation is
+   * not done, and the client polls `GET /api/attempts/:id` for the transition.
+   *
+   * On a serverless host the instance is frozen as soon as it responds, so
+   * `awaitEvaluations` makes this wait for the run it just scheduled. The
+   * contract the client sees does not change - the attempt in the response has
+   * simply already moved past EVALUATING, and the poll settles on the first
+   * request.
    */
-  app.post('/api/attempts/:id/submission', (req, res) => {
-    const { attempt, outcome, report } = container.practice.submit(req.params.id, body(req));
-    res.status(outcome === 'accepted' ? 202 : 200).json({
-      attempt: attemptDto(attempt),
-      outcome,
-      structural: structuralReportDto(report),
-    });
-  });
+  app.post(
+    '/api/attempts/:id/submission',
+    route(async (req, res) => {
+      const { attempt, outcome, report, pending } = container.practice.submit(req.params.id, body(req));
+      // Re-read after waiting: the coordinator wrote the new status through the
+      // repository, which does not have to hand back the same instance.
+      const current =
+        pending && container.awaitEvaluations
+          ? await pending.then(() => container.practice.getAttempt(req.params.id))
+          : attempt;
+      res.status(outcome === 'accepted' ? 202 : 200).json({
+        attempt: attemptDto(current),
+        outcome,
+        structural: structuralReportDto(report),
+      });
+    }),
+  );
 
   app.get('/api/attempts/:id/evaluation', (req, res) => {
     const attempt = container.practice.getAttempt(req.params.id);
@@ -136,10 +173,16 @@ export function createApp(container: Container) {
     return res.json({ evaluation: evaluationDto(entry.evaluation), comparison: entry.comparison });
   });
 
-  app.post('/api/attempts/:id/evaluation/retry', (req, res) => {
-    const attempt = container.practice.retryEvaluation(req.params.id);
-    res.status(202).json({ attempt: attemptDto(attempt) });
-  });
+  app.post(
+    '/api/attempts/:id/evaluation/retry',
+    route(async (req, res) => {
+      const { attempt, pending } = container.practice.retryEvaluation(req.params.id);
+      const current = container.awaitEvaluations
+        ? await pending.then(() => container.practice.getAttempt(req.params.id))
+        : attempt;
+      res.status(202).json({ attempt: attemptDto(current) });
+    }),
+  );
 
   app.use((_req, res) => {
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No such endpoint.' } });

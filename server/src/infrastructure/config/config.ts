@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 
 export type EvaluatorMode = 'auto' | 'heuristic' | 'llm';
+export type PersistenceMode = 'sqlite' | 'memory';
 
 export interface AppConfig {
   readonly port: number;
@@ -15,6 +16,8 @@ export interface AppConfig {
   readonly llmTimeoutMs: number;
   readonly demoEvaluationDelayMs: number;
   readonly webOrigin: string;
+  readonly persistence: PersistenceMode;
+  readonly awaitEvaluations: boolean;
 }
 
 /**
@@ -40,6 +43,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     llmTimeoutMs: intOr(env.LLM_TIMEOUT_MS, 60_000),
     demoEvaluationDelayMs: intOr(env.DEMO_EVALUATION_DELAY_MS, 1200),
     webOrigin: env.WEB_ORIGIN ?? 'http://localhost:5173',
+    persistence: readPersistence(env.PERSISTENCE),
+    // A serverless instance is frozen the moment it answers, so work started
+    // after the response never finishes there. On Vercel the HTTP adapter
+    // therefore waits for the evaluation instead of backgrounding it; a
+    // long-running server keeps the background behaviour it was designed for.
+    awaitEvaluations: readBool(env.AWAIT_EVALUATIONS, env.VERCEL !== undefined),
   };
 }
 
@@ -47,6 +56,18 @@ function readMode(value: string | undefined): EvaluatorMode {
   const mode = (value ?? 'auto').toLowerCase();
   if (mode === 'heuristic' || mode === 'llm' || mode === 'auto') return mode;
   throw new Error(`EVALUATOR must be one of auto | heuristic | llm, received '${value}'.`);
+}
+
+function readPersistence(value: string | undefined): PersistenceMode {
+  const mode = (value ?? 'sqlite').toLowerCase();
+  if (mode === 'sqlite' || mode === 'memory') return mode;
+  throw new Error(`PERSISTENCE must be one of sqlite | memory, received '${value}'.`);
+}
+
+function readBool(value: string | undefined, fallback: boolean): boolean {
+  const normalised = value?.trim().toLowerCase();
+  if (normalised === undefined || normalised === '') return fallback;
+  return normalised === '1' || normalised === 'true' || normalised === 'yes';
 }
 
 function intOr(value: string | undefined, fallback: number): number {

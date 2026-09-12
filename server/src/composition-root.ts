@@ -3,9 +3,12 @@ import { AttemptHistoryService } from './application/AttemptHistoryService';
 import { EvaluationCoordinator } from './application/EvaluationCoordinator';
 import { EvaluatorRegistry } from './application/EvaluatorRegistry';
 import { PracticeService } from './application/PracticeService';
+import { AttemptRepository } from './domain/attempt/AttemptRepository';
+import { EvaluationRepository } from './domain/evaluation/EvaluationRepository';
 import { Evaluator } from './domain/evaluation/Evaluator';
 import { Rubric } from './domain/evaluation/Rubric';
 import { RubricRegistry } from './domain/evaluation/RubricRegistry';
+import { ProblemRepository } from './domain/problem/ProblemRepository';
 import { Clock, IdGenerator, systemClock, uuidIdGenerator } from './domain/shared/clock';
 import { SubmissionContentFactory } from './domain/submission/SubmissionContentFactory';
 import { HeuristicEvaluator } from './evaluators/heuristic/HeuristicEvaluator';
@@ -15,6 +18,11 @@ import { AppConfig } from './infrastructure/config/config';
 import { PROBLEM_DEFINITIONS } from './infrastructure/content/problems';
 import { openDatabase } from './infrastructure/persistence/Database';
 import {
+  InMemoryAttemptRepository,
+  InMemoryEvaluationRepository,
+  InMemoryProblemRepository,
+} from './infrastructure/persistence/InMemoryRepositories';
+import {
   SqliteAttemptRepository,
   SqliteEvaluationRepository,
   SqliteProblemRepository,
@@ -22,7 +30,8 @@ import {
 
 export interface Container {
   readonly config: AppConfig;
-  readonly db: DatabaseSync;
+  /** Absent when running on the in-memory repositories. */
+  readonly db?: DatabaseSync;
   readonly practice: PracticeService;
   readonly history: AttemptHistoryService;
   readonly coordinator: EvaluationCoordinator;
@@ -30,6 +39,9 @@ export interface Container {
   readonly content: SubmissionContentFactory;
   readonly evaluator: Evaluator;
   readonly evaluationMode: { kind: string; label: string; isDemo: boolean; reason: string };
+  readonly persistenceMode: { kind: 'sqlite' | 'memory'; location: string; durable: boolean; reason: string };
+  /** True when the HTTP adapter must wait for an evaluation instead of backgrounding it. */
+  readonly awaitEvaluations: boolean;
   close(): void;
 }
 
@@ -49,16 +61,11 @@ export interface ContainerOverrides {
  * `application/` or `domain/` changes, because nothing there names an evaluator.
  */
 export function buildContainer(config: AppConfig, overrides: ContainerOverrides = {}): Container {
-  const db = openDatabase(config.databasePath);
   const content = new SubmissionContentFactory();
   const rubrics = new RubricRegistry();
   const rubric = rubrics.current;
 
-  const problems = new SqliteProblemRepository(db);
-  seedProblems(problems);
-
-  const attempts = new SqliteAttemptRepository(db, content);
-  const evaluations = new SqliteEvaluationRepository(db, rubrics);
+  const { db, problems, attempts, evaluations, persistenceMode } = resolvePersistence(config, content, rubrics);
 
   const { evaluators, mode } = resolveEvaluators(config, overrides.evaluators);
   const registry = new EvaluatorRegistry(evaluators);
@@ -104,12 +111,88 @@ export function buildContainer(config: AppConfig, overrides: ContainerOverrides 
     content,
     evaluator: registry.all[0],
     evaluationMode: mode,
-    close: () => db.close(),
+    persistenceMode,
+    awaitEvaluations: config.awaitEvaluations,
+    close: () => db?.close(),
   };
 }
 
-function seedProblems(repository: SqliteProblemRepository): void {
-  PROBLEM_DEFINITIONS.forEach((definition, index) => repository.upsert(definition, index));
+interface ResolvedPersistence {
+  readonly db?: DatabaseSync;
+  readonly problems: ProblemRepository;
+  readonly attempts: AttemptRepository;
+  readonly evaluations: EvaluationRepository;
+  readonly persistenceMode: Container['persistenceMode'];
+}
+
+/**
+ * Which side of the repository ports gets wired in, and why.
+ *
+ * `sqlite` is the real adapter and the default. `memory` exists because a
+ * serverless function has no writable, shared disk and, depending on the Node
+ * build, no `node:sqlite` at all - so the same application runs on the
+ * in-memory adapter there rather than not running. The fallback is deliberate
+ * and reported (see `GET /api/health`): a demo that degrades loudly beats one
+ * that 500s on every request.
+ */
+function resolvePersistence(
+  config: AppConfig,
+  content: SubmissionContentFactory,
+  rubrics: RubricRegistry,
+): ResolvedPersistence {
+  if (config.persistence === 'sqlite') {
+    try {
+      return sqlitePersistence(config, content, rubrics, {
+        kind: 'sqlite',
+        location: config.databasePath,
+        durable: config.databasePath !== ':memory:',
+        reason: 'SQLite via node:sqlite.',
+      });
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      console.warn(`[persistence] SQLite unavailable (${why}); falling back to in-memory repositories.`);
+      return memoryPersistence({
+        kind: 'memory',
+        location: 'process memory',
+        durable: false,
+        reason: `SQLite could not be opened (${why}), so this instance keeps attempts in memory only.`,
+      });
+    }
+  }
+
+  return memoryPersistence({
+    kind: 'memory',
+    location: 'process memory',
+    durable: false,
+    reason: 'PERSISTENCE=memory: attempts live in this instance only and are lost when it is recycled.',
+  });
+}
+
+function sqlitePersistence(
+  config: AppConfig,
+  content: SubmissionContentFactory,
+  rubrics: RubricRegistry,
+  persistenceMode: Container['persistenceMode'],
+): ResolvedPersistence {
+  const db = openDatabase(config.databasePath);
+  const problems = new SqliteProblemRepository(db);
+  PROBLEM_DEFINITIONS.forEach((definition, index) => problems.upsert(definition, index));
+  return {
+    db,
+    problems,
+    attempts: new SqliteAttemptRepository(db, content),
+    evaluations: new SqliteEvaluationRepository(db, rubrics),
+    persistenceMode,
+  };
+}
+
+function memoryPersistence(persistenceMode: Container['persistenceMode']): ResolvedPersistence {
+  return {
+    problems: new InMemoryProblemRepository(PROBLEM_DEFINITIONS),
+    attempts: new InMemoryAttemptRepository(),
+    evaluations: new InMemoryEvaluationRepository(),
+    persistenceMode,
+  };
 }
 
 /**

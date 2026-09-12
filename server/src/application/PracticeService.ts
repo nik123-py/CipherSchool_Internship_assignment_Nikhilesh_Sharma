@@ -107,11 +107,20 @@ export class PracticeService {
    *   4. only then schedule the evaluator
    *
    * Step 3 before step 4 is the reason an evaluator crash can never lose work.
+   *
+   * `pending` is the scheduled run. Callers are free to ignore it - that is the
+   * normal, background behaviour - but a host that is about to be suspended
+   * (a serverless function answering a request) can await it instead.
    */
   submit(
     attemptId: string,
     patch?: Record<string, unknown>,
-  ): { attempt: Attempt; outcome: 'accepted' | 'already-submitted'; report: StructuralReport } {
+  ): {
+    attempt: Attempt;
+    outcome: 'accepted' | 'already-submitted';
+    report: StructuralReport;
+    pending?: Promise<void>;
+  } {
     const attempt = this.getAttempt(attemptId);
     const content: SubmissionContent = patch
       ? this.deps.content.merge(attempt.currentContent, patch)
@@ -130,14 +139,13 @@ export class PracticeService {
     const outcome = attempt.submit(content, this.deps.clock.now());
     this.deps.attempts.save(attempt);
 
-    if (outcome === 'accepted') {
-      this.deps.coordinator.schedule(attempt.id, report);
-    }
-    return { attempt, outcome, report };
+    const pending =
+      outcome === 'accepted' ? this.deps.coordinator.schedule(attempt.id, report) : undefined;
+    return { attempt, outcome, report, pending };
   }
 
   /** Re-run a failed evaluation. The submission is untouched. */
-  retryEvaluation(attemptId: string): Attempt {
+  retryEvaluation(attemptId: string): { attempt: Attempt; pending: Promise<void> } {
     const attempt = this.getAttempt(attemptId);
     if (!attempt.canRetryEvaluation) {
       throw new ConflictError(
@@ -145,8 +153,7 @@ export class PracticeService {
         { attemptId, status: attempt.status },
       );
     }
-    this.deps.coordinator.schedule(attempt.id);
-    return attempt;
+    return { attempt, pending: this.deps.coordinator.schedule(attempt.id) };
   }
 
   /**
