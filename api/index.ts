@@ -1,4 +1,4 @@
-﻿import { buildContainer } from '../server/src/composition-root.js';
+import { buildContainer } from '../server/src/composition-root.js';
 import { loadConfig } from '../server/src/infrastructure/config/config.js';
 import { createApp } from '../server/src/interfaces/http/app.js';
 
