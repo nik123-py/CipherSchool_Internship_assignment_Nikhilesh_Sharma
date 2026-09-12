@@ -18,6 +18,7 @@
     "test": "npm run test --workspace server",
     "test:watch": "npm run test:watch --workspace server",
     "build": "npm run build --workspace server && npm run build --workspace web",
+    "build:vercel": "npm run build --workspace web",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
     "start": "npm run start --workspace server",
     "docs:pdf": "node scripts/build-docs.mjs"

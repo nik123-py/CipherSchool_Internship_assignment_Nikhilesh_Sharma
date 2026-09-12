@@ -35,9 +35,10 @@ export class ApiError extends Error {
   }
 }
 
-// In production the Vite proxy is not available, so we read the Railway API
-// base URL from the build-time env variable. In development this is an empty
-// string and the Vite proxy forwards /api → localhost:4000 as before.
+// In local dev, Vite proxies /api → localhost:4000 (no base URL needed).
+// On Vercel, both the static frontend and the /api/* serverless function live
+// on the same domain, so same-origin fetch('/api/...') works out of the box.
+// VITE_API_BASE_URL can optionally override this if the API lives elsewhere.
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
