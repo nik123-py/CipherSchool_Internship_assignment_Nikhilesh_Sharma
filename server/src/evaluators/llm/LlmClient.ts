@@ -21,6 +21,14 @@ export interface LlmClient {
   complete(request: LlmRequest): Promise<string>;
 }
 
+/**
+ * How the key is presented. Anthropic itself wants `x-api-key`; compatible
+ * gateways (AgentRouter, OpenRouter and the other relays that speak the same
+ * wire format) generally want a bearer token instead, which is why this is
+ * configuration rather than a constant.
+ */
+export type AnthropicAuthScheme = 'x-api-key' | 'bearer';
+
 export class AnthropicClient implements LlmClient {
   readonly id: string;
   readonly label: string;
@@ -29,9 +37,14 @@ export class AnthropicClient implements LlmClient {
     private readonly apiKey: string,
     private readonly model = 'claude-sonnet-5',
     private readonly baseUrl = 'https://api.anthropic.com',
+    private readonly authScheme: AnthropicAuthScheme = 'x-api-key',
   ) {
     this.id = `anthropic:${model}`;
-    this.label = `Anthropic ${model}`;
+    // The host is part of the label, not the id: two evaluations of the same
+    // model stay comparable, while a reviewer can still see that the judgement
+    // came through a relay rather than from Anthropic directly.
+    const host = hostOf(baseUrl);
+    this.label = host ? `Anthropic ${model} via ${host}` : `Anthropic ${model}`;
   }
 
   async complete(request: LlmRequest): Promise<string> {
@@ -39,7 +52,9 @@ export class AnthropicClient implements LlmClient {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': this.apiKey,
+        ...(this.authScheme === 'bearer'
+          ? { authorization: `Bearer ${this.apiKey}` }
+          : { 'x-api-key': this.apiKey }),
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
@@ -65,6 +80,16 @@ export class AnthropicClient implements LlmClient {
       .join('');
     if (!text.trim()) throw new EvaluationFailedError('Anthropic API returned an empty response.');
     return text;
+  }
+}
+
+/** Empty for Anthropic's own endpoint, so the common case reads unchanged. */
+function hostOf(baseUrl: string): string | undefined {
+  try {
+    const { host } = new URL(baseUrl);
+    return host === 'api.anthropic.com' ? undefined : host;
+  } catch {
+    return undefined;
   }
 }
 

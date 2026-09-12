@@ -260,7 +260,12 @@ function resolveEvaluators(
 
 function resolveLlmClient(config: AppConfig): LlmClient | undefined {
   if (config.anthropicApiKey)
-    return new AnthropicClient(config.anthropicApiKey, config.anthropicModel, config.anthropicBaseUrl);
+    return new AnthropicClient(
+      config.anthropicApiKey,
+      config.anthropicModel,
+      config.anthropicBaseUrl,
+      config.anthropicAuthScheme,
+    );
   if (config.openaiApiKey)
     return new OpenAiClient(config.openaiApiKey, config.openaiModel, config.openaiBaseUrl);
   return undefined;

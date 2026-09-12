@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Rubric } from '../../src/domain/evaluation/Rubric';
 import { EvaluationFailedError } from '../../src/domain/shared/errors';
 import { Problem } from '../../src/domain/problem/Problem';
 import { StructuredTextSubmission } from '../../src/domain/submission/StructuredTextSubmission';
 import { HeuristicEvaluator } from '../../src/evaluators/heuristic/HeuristicEvaluator';
-import { LlmClient, LlmRequest } from '../../src/evaluators/llm/LlmClient';
+import { AnthropicClient, LlmClient, LlmRequest } from '../../src/evaluators/llm/LlmClient';
 import { LlmEvaluator } from '../../src/evaluators/llm/LlmEvaluator';
 import { isGrounded, parseVerdict } from '../../src/evaluators/llm/verdictParser';
 import { PROBLEM_DEFINITIONS } from '../../src/infrastructure/content/problems';
@@ -265,5 +265,56 @@ describe('Grounding check', () => {
   it('does not accidentally accept evidence from a different submission', () => {
     const weakDocument = StructuredTextSubmission.create(WEAK_SUBMISSION).toDesignDocument();
     expect(isGrounded('FeeCalculator turns duration and vehicle type into Money', weakDocument)).toBe(false);
+  });
+});
+
+
+/**
+ * The wire contract with Anthropic and with the compatible gateways that
+ * resell it. Anthropic authenticates with `x-api-key`; relays such as
+ * AgentRouter take a bearer token, and sending the wrong one is a 401 that
+ * looks exactly like a bad key - so the choice is asserted here.
+ */
+describe('AnthropicClient authentication', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function captureHeaders(): { headers: () => Record<string, string>; url: () => string } {
+    let seen: Record<string, string> = {};
+    let seenUrl = '';
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      seenUrl = String(url);
+      seen = (init.headers ?? {}) as Record<string, string>;
+      return new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }), { status: 200 });
+    });
+    return { headers: () => seen, url: () => seenUrl };
+  }
+
+  const call = (client: AnthropicClient) =>
+    client.complete({ system: 's', user: 'u', maxTokens: 16 });
+
+  it('sends x-api-key to Anthropic itself', async () => {
+    const captured = captureHeaders();
+    await call(new AnthropicClient('key-123', 'claude-sonnet-5'));
+    expect(captured.url()).toBe('https://api.anthropic.com/v1/messages');
+    expect(captured.headers()['x-api-key']).toBe('key-123');
+    expect(captured.headers().authorization).toBeUndefined();
+  });
+
+  it('sends a bearer token when the gateway wants one', async () => {
+    const captured = captureHeaders();
+    await call(
+      new AnthropicClient('key-123', 'claude-opus-4-8', 'https://co.agentrouter.org', 'bearer'),
+    );
+    expect(captured.url()).toBe('https://co.agentrouter.org/v1/messages');
+    expect(captured.headers().authorization).toBe('Bearer key-123');
+    expect(captured.headers()['x-api-key']).toBeUndefined();
+  });
+
+  it('names the relay in the label but not in the recorded id', () => {
+    const direct = new AnthropicClient('k', 'claude-opus-4-8');
+    const relayed = new AnthropicClient('k', 'claude-opus-4-8', 'https://co.agentrouter.org', 'bearer');
+    expect(relayed.id).toBe(direct.id);
+    expect(relayed.label).toBe('Anthropic claude-opus-4-8 via co.agentrouter.org');
+    expect(direct.label).toBe('Anthropic claude-opus-4-8');
   });
 });

@@ -1,7 +1,11 @@
 import { resolve } from 'node:path';
+// Type-only: the wire detail lives with the client that sends it, while the
+// environment parsing that chooses it stays here with every other env read.
+import type { AnthropicAuthScheme } from '../../evaluators/llm/LlmClient';
 
 export type EvaluatorMode = 'auto' | 'heuristic' | 'llm';
 export type PersistenceMode = 'sqlite' | 'memory';
+export type { AnthropicAuthScheme };
 
 export interface AppConfig {
   readonly port: number;
@@ -10,6 +14,7 @@ export interface AppConfig {
   readonly anthropicApiKey?: string;
   readonly anthropicModel: string;
   readonly anthropicBaseUrl: string;
+  readonly anthropicAuthScheme: AnthropicAuthScheme;
   readonly openaiApiKey?: string;
   readonly openaiModel: string;
   readonly openaiBaseUrl: string;
@@ -37,6 +42,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     anthropicApiKey: nonEmpty(env.ANTHROPIC_API_KEY),
     anthropicModel: env.ANTHROPIC_MODEL ?? 'claude-sonnet-5',
     anthropicBaseUrl: env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com',
+    anthropicAuthScheme: readAuthScheme(env.ANTHROPIC_AUTH_SCHEME),
     openaiApiKey: nonEmpty(env.OPENAI_API_KEY),
     openaiModel: env.OPENAI_MODEL ?? 'gpt-4o-mini',
     openaiBaseUrl: env.OPENAI_BASE_URL ?? 'https://api.openai.com',
@@ -56,6 +62,12 @@ function readMode(value: string | undefined): EvaluatorMode {
   const mode = (value ?? 'auto').toLowerCase();
   if (mode === 'heuristic' || mode === 'llm' || mode === 'auto') return mode;
   throw new Error(`EVALUATOR must be one of auto | heuristic | llm, received '${value}'.`);
+}
+
+function readAuthScheme(value: string | undefined): AnthropicAuthScheme {
+  const scheme = (value ?? 'x-api-key').toLowerCase();
+  if (scheme === 'x-api-key' || scheme === 'bearer') return scheme;
+  throw new Error(`ANTHROPIC_AUTH_SCHEME must be one of x-api-key | bearer, received '${value}'.`);
 }
 
 function readPersistence(value: string | undefined): PersistenceMode {

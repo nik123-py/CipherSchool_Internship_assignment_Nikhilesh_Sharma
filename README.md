@@ -202,7 +202,9 @@ Every value is optional; see [.env.example](.env.example).
 | --- | --- | --- |
 | `EVALUATOR` | `auto` | `auto`, `heuristic` or `llm`. `llm` fails at startup if no key |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | – | Provide one to enable real evaluation |
-| `ANTHROPIC_MODEL` | `claude-sonnet-5` | |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5` | Must be a model the endpoint actually serves |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Point at a compatible gateway to relay through it |
+| `ANTHROPIC_AUTH_SCHEME` | `x-api-key` | `bearer` for gateways that want a bearer token |
 | `OPENAI_MODEL` | `gpt-4o-mini` | |
 | `LLM_TIMEOUT_MS` | `60000` | Then the attempt is `FAILED` and retryable |
 | `PORT` | `4000` | |
@@ -235,7 +237,7 @@ Environment variables to set:
 | `DATABASE_PATH` | `/tmp/lld.db` | The only writable path a function has, private to one instance |
 | `AWAIT_EVALUATIONS` | `true` | Implied by `VERCEL`; explicit so the environment reads honestly |
 | `EVALUATOR` | `llm` or `auto` | |
-| `ANTHROPIC_API_KEY` | your key | Set `ANTHROPIC_BASE_URL` too if the key is for a proxy |
+| `ANTHROPIC_API_KEY` | your key | A gateway key also needs `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_SCHEME` |
 | `LLM_TIMEOUT_MS` | `45000` | Must stay under the function's 60s `maxDuration` |
 | `DEMO_EVALUATION_DELAY_MS` | `0` | No artificial delay in production |
 
