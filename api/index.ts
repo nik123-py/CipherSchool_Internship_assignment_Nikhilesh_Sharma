@@ -1,7 +1,4 @@
-import express from 'express';
-import { buildContainer, Container } from '../server/src/composition-root';
-import { loadConfig } from '../server/src/infrastructure/config/config';
-import { createApp } from '../server/src/interfaces/http/app';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
 /**
  * Vercel Serverless Function entry-point: the whole Express app behind one
@@ -17,49 +14,58 @@ import { createApp } from '../server/src/interfaces/http/app';
  *    (defaulted on by the presence of `VERCEL`) makes the submit request wait
  *    for the evaluator instead of backgrounding it.
  *
- * Imports are extensionless to match the rest of `server/src`: this file is
- * bundled, never run through plain Node ESM resolution.
+ * Why the application is loaded dynamically rather than with static imports:
+ * a static import that throws - a dependency missing from the function bundle,
+ * a runtime without `node:sqlite`, a configuration the composition root
+ * refuses - fails before any code here runs. The platform turns that into
+ * FUNCTION_INVOCATION_FAILED: a bare 500, no body, identical for every cause,
+ * and invisible unless you can read the runtime log. Importing inside the
+ * handler makes every one of those failures catchable, so the reason is
+ * served in the response instead of being swallowed by the platform.
  */
-function boot(): express.Express {
-  try {
-    const container: Container = buildContainer(loadConfig());
-    // Anything a previous, now-recycled instance left mid-evaluation is failed
-    // with a retry offer rather than left spinning in the UI.
-    container.coordinator.recoverStuckEvaluations();
-    return createApp(container);
-  } catch (error) {
-    return misconfigured(error);
+type Handler = (req: IncomingMessage, res: ServerResponse) => void;
+
+let cached: Handler | undefined;
+let failure: string | undefined;
+
+async function load(): Promise<Handler> {
+  const [{ buildContainer }, { loadConfig }, { createApp }] = await Promise.all([
+    import('../server/src/composition-root'),
+    import('../server/src/infrastructure/config/config'),
+    import('../server/src/interfaces/http/app'),
+  ]);
+
+  const container = buildContainer(loadConfig());
+  // Anything a previous, now-recycled instance left mid-evaluation is failed
+  // with a retry offer rather than left spinning in the UI.
+  container.coordinator.recoverStuckEvaluations();
+  return createApp(container) as unknown as Handler;
+}
+
+export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!cached && !failure) {
+    try {
+      cached = await load();
+    } catch (error) {
+      failure = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error);
+      console.error('[boot] the application could not start:', failure);
+    }
   }
-}
 
-/**
- * Startup refuses to boot on a bad configuration - `EVALUATOR=llm` with no key
- * is the usual one - and on a long-running server that is exactly right: the
- * process dies and the reason is the last line in the log.
- *
- * A function has no such log to read. A throw at module scope becomes
- * FUNCTION_INVOCATION_FAILED, which reaches the browser as a bare 500 with no
- * body, on every route, identical for every possible cause. So the failure is
- * caught and served instead: the same refusal, in the response, where whoever
- * is looking at the broken page can act on it.
- */
-function misconfigured(error: unknown): express.Express {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error('[boot] the application could not start:', message);
+  if (cached) return cached(req, res);
 
-  const app = express();
-  app.get('/api/health', (_req, res) => {
-    res.status(503).json({ status: 'misconfigured', reason: message });
-  });
-  app.use((_req, res) => {
-    res.status(503).json({
+  // Same shape as the application's own errors, so the client renders it as a
+  // message rather than as an unexplained failure.
+  res.statusCode = 503;
+  res.setHeader('content-type', 'application/json');
+  res.end(
+    JSON.stringify({
+      status: 'misconfigured',
       error: {
-        code: 'MISCONFIGURED',
-        message: `The server could not start: ${message}`,
+        code: 'BOOT_FAILED',
+        message: `The server could not start: ${(failure ?? '').split('\n')[0]}`,
+        detail: failure,
       },
-    });
-  });
-  return app;
+    }),
+  );
 }
-
-export default boot();
