@@ -40,7 +40,7 @@ the banner in the UI.
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Server + web together, with reload |
-| `npm test` | 105 tests (domain, application, evaluators, HTTP) |
+| `npm test` | 110 tests (domain, application, evaluators, HTTP) |
 | `npm run typecheck` | Type checks both workspaces |
 | `npm run build` | Type check + production web bundle |
 | `npm run seed` | Writes the built-in problems into the database |
@@ -207,6 +207,7 @@ Every value is optional; see [.env.example](.env.example).
 | `ANTHROPIC_AUTH_SCHEME` | `x-api-key` | `bearer` for gateways that want a bearer token |
 | `OPENAI_MODEL` | `gpt-4o-mini` | |
 | `LLM_TIMEOUT_MS` | `60000` | Then the attempt is `FAILED` and retryable |
+| `LLM_MAX_TOKENS` | `4000` | Reasoning models spend part of this budget thinking |
 | `PORT` | `4000` | |
 | `DATABASE_PATH` | `data/lld-practice.db` | `:memory:` is supported |
 | `PERSISTENCE` | `sqlite` | `memory` runs the same app on the in-memory repositories |

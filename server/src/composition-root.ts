@@ -231,7 +231,7 @@ function resolveEvaluators(
 
   const useLlm = client !== undefined && config.evaluatorMode !== 'heuristic';
   if (useLlm && client) {
-    const evaluator = new LlmEvaluator(client);
+    const evaluator = new LlmEvaluator(client, config.llmMaxTokens);
     return {
       evaluators: [evaluator],
       mode: {

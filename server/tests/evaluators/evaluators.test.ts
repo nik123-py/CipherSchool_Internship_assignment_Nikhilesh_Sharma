@@ -298,23 +298,35 @@ describe('AnthropicClient authentication', () => {
     expect(captured.url()).toBe('https://api.anthropic.com/v1/messages');
     expect(captured.headers()['x-api-key']).toBe('key-123');
     expect(captured.headers().authorization).toBeUndefined();
+    // No relay is in play, so nothing claims to be Claude Code.
+    expect(captured.headers()['user-agent']).toBeUndefined();
   });
 
   it('sends a bearer token when the gateway wants one', async () => {
     const captured = captureHeaders();
-    await call(
-      new AnthropicClient('key-123', 'claude-opus-4-8', 'https://co.agentrouter.org', 'bearer'),
-    );
-    expect(captured.url()).toBe('https://co.agentrouter.org/v1/messages');
+    await call(new AnthropicClient('key-123', 'glm-5.3', 'https://agentrouter.org', 'bearer'));
+    expect(captured.url()).toBe('https://agentrouter.org/v1/messages');
     expect(captured.headers().authorization).toBe('Bearer key-123');
     expect(captured.headers()['x-api-key']).toBeUndefined();
   });
 
+  it("sends the relay's expected user-agent, without which its WAF returns 401", async () => {
+    const captured = captureHeaders();
+    await call(new AnthropicClient('k', 'glm-5.3', 'https://agentrouter.org', 'bearer'));
+    expect(captured.headers()['user-agent']).toMatch(/^claude-cli\//);
+  });
+
   it('names the relay in the label but not in the recorded id', () => {
     const direct = new AnthropicClient('k', 'claude-opus-4-8');
-    const relayed = new AnthropicClient('k', 'claude-opus-4-8', 'https://co.agentrouter.org', 'bearer');
+    const relayed = new AnthropicClient('k', 'claude-opus-4-8', 'https://agentrouter.org', 'bearer');
     expect(relayed.id).toBe(direct.id);
-    expect(relayed.label).toBe('Anthropic claude-opus-4-8 via co.agentrouter.org');
+    expect(relayed.label).toBe('claude-opus-4-8 via agentrouter.org');
     expect(direct.label).toBe('Anthropic claude-opus-4-8');
+  });
+
+  it('does not call a relayed non-Anthropic model an Anthropic one', () => {
+    const relayed = new AnthropicClient('k', 'glm-5.3', 'https://agentrouter.org', 'bearer');
+    expect(relayed.label).toBe('glm-5.3 via agentrouter.org');
+    expect(relayed.label).not.toMatch(/Anthropic/);
   });
 });

@@ -19,6 +19,7 @@ export interface AppConfig {
   readonly openaiModel: string;
   readonly openaiBaseUrl: string;
   readonly llmTimeoutMs: number;
+  readonly llmMaxTokens: number;
   readonly demoEvaluationDelayMs: number;
   readonly webOrigin: string;
   readonly persistence: PersistenceMode;
@@ -47,6 +48,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     openaiModel: env.OPENAI_MODEL ?? 'gpt-4o-mini',
     openaiBaseUrl: env.OPENAI_BASE_URL ?? 'https://api.openai.com',
     llmTimeoutMs: intOr(env.LLM_TIMEOUT_MS, 60_000),
+    // Reasoning models spend part of this budget thinking before they write
+    // anything, so the verdict needs headroom above its own length or the
+    // response comes back with no text at all.
+    llmMaxTokens: intOr(env.LLM_MAX_TOKENS, 4000),
     demoEvaluationDelayMs: intOr(env.DEMO_EVALUATION_DELAY_MS, 1200),
     webOrigin: env.WEB_ORIGIN ?? 'http://localhost:5173',
     persistence: readPersistence(env.PERSISTENCE),

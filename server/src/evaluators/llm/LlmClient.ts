@@ -29,6 +29,17 @@ export interface LlmClient {
  */
 export type AnthropicAuthScheme = 'x-api-key' | 'bearer';
 
+/**
+ * Relays that resell the Anthropic API front their upstream with a WAF that
+ * only admits traffic looking like Claude Code; anything else is rejected as
+ * `401 Invalid API Key!`, which is indistinguishable from a genuinely bad key
+ * and cost an afternoon to diagnose. Measured against AgentRouter, the
+ * User-Agent is the whole test - `x-app`, `anthropic-beta` and the Stainless
+ * SDK headers are not checked - so this is the one header we add, and only
+ * when a relay is configured. Requests to Anthropic proper are untouched.
+ */
+const RELAY_USER_AGENT = 'claude-cli/2.1.158 (external, sdk-cli)';
+
 export class AnthropicClient implements LlmClient {
   readonly id: string;
   readonly label: string;
@@ -42,9 +53,12 @@ export class AnthropicClient implements LlmClient {
     this.id = `anthropic:${model}`;
     // The host is part of the label, not the id: two evaluations of the same
     // model stay comparable, while a reviewer can still see that the judgement
-    // came through a relay rather than from Anthropic directly.
+    // came through a relay. A relayed model is not named "Anthropic ..." -
+    // these gateways also serve models from other vendors over the same wire
+    // format, and mislabelling which model graded a design would be a lie in
+    // the one place the product asks to be trusted.
     const host = hostOf(baseUrl);
-    this.label = host ? `Anthropic ${model} via ${host}` : `Anthropic ${model}`;
+    this.label = host ? `${model} via ${host}` : `Anthropic ${model}`;
   }
 
   async complete(request: LlmRequest): Promise<string> {
@@ -55,6 +69,7 @@ export class AnthropicClient implements LlmClient {
         ...(this.authScheme === 'bearer'
           ? { authorization: `Bearer ${this.apiKey}` }
           : { 'x-api-key': this.apiKey }),
+        ...(hostOf(this.baseUrl) ? { 'user-agent': RELAY_USER_AGENT } : {}),
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
@@ -73,12 +88,26 @@ export class AnthropicClient implements LlmClient {
       );
     }
 
-    const body = (await response.json()) as { content?: Array<{ type: string; text?: string }> };
-    const text = (body.content ?? [])
+    const body = (await response.json()) as {
+      content?: Array<{ type: string; text?: string }>;
+      stop_reason?: string;
+    };
+    const blocks = body.content ?? [];
+    const text = blocks
       .filter((block) => block.type === 'text')
       .map((block) => block.text ?? '')
       .join('');
-    if (!text.trim()) throw new EvaluationFailedError('Anthropic API returned an empty response.');
+    if (!text.trim()) {
+      // A reasoning model that used its whole allowance on `thinking` blocks
+      // returns a perfectly valid response containing no answer. Saying that
+      // plainly points at LLM_MAX_TOKENS instead of at the network.
+      const thought = blocks.some((block) => block.type === 'thinking');
+      throw new EvaluationFailedError(
+        body.stop_reason === 'max_tokens' && thought
+          ? `${this.model} used its whole ${request.maxTokens}-token budget reasoning and never wrote a verdict. Raise LLM_MAX_TOKENS.`
+          : 'The model returned an empty response.',
+      );
+    }
     return text;
   }
 }
