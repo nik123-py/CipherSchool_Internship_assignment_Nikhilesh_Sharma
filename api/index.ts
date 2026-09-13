@@ -14,38 +14,30 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
  *    (defaulted on by the presence of `VERCEL`) makes the submit request wait
  *    for the evaluator instead of backgrounding it.
  *
- * Why the application is loaded dynamically rather than with static imports:
- * a static import that throws - a dependency missing from the function bundle,
- * a runtime without `node:sqlite`, a configuration the composition root
- * refuses - fails before any code here runs. The platform turns that into
- * FUNCTION_INVOCATION_FAILED: a bare 500, no body, identical for every cause,
- * and invisible unless you can read the runtime log. Importing inside the
- * handler makes every one of those failures catchable, so the reason is
- * served in the response instead of being swallowed by the platform.
+ * This file imports `./_app.js`, which the build bundles from
+ * `server/src/serverless.ts`, rather than reaching into `server/src` directly.
+ * Vercel compiles this entry but does not follow TypeScript imports outside
+ * `api/`, so the direct version deployed without the application in it and
+ * died with ERR_MODULE_NOT_FOUND on every request. One self-contained bundle
+ * beside the entry is the thing that actually ships.
+ *
+ * The import is inside the handler so that a failure to load - a bad
+ * configuration, a missing bundle, an unsupported runtime builtin - is
+ * catchable. Left to the platform it becomes FUNCTION_INVOCATION_FAILED: a
+ * bare 500, no body, identical for every cause, readable only in a log.
  */
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
 
 let cached: Handler | undefined;
 let failure: string | undefined;
 
-async function load(): Promise<Handler> {
-  const [{ buildContainer }, { loadConfig }, { createApp }] = await Promise.all([
-    import('../server/src/composition-root'),
-    import('../server/src/infrastructure/config/config'),
-    import('../server/src/interfaces/http/app'),
-  ]);
-
-  const container = buildContainer(loadConfig());
-  // Anything a previous, now-recycled instance left mid-evaluation is failed
-  // with a retry offer rather than left spinning in the UI.
-  container.coordinator.recoverStuckEvaluations();
-  return createApp(container) as unknown as Handler;
-}
-
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!cached && !failure) {
     try {
-      cached = await load();
+      const { createServerlessApp } = (await import('./_app.js')) as {
+        createServerlessApp: () => Handler;
+      };
+      cached = createServerlessApp();
     } catch (error) {
       failure = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error);
       console.error('[boot] the application could not start:', failure);

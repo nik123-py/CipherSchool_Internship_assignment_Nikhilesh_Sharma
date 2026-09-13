@@ -19,13 +19,15 @@
     "test": "npm run test --workspace server",
     "test:watch": "npm run test:watch --workspace server",
     "build": "npm run build --workspace server && npm run build --workspace web",
-    "build:vercel": "npm run build --workspace web",
+    "build:vercel": "npm run build:api && npm run build --workspace web",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
     "start": "npm run start --workspace server",
-    "docs:pdf": "node scripts/build-docs.mjs"
+    "docs:pdf": "node scripts/build-docs.mjs",
+    "build:api": "esbuild server/src/serverless.ts --bundle --platform=node --target=node22 --format=esm --outfile=api/_app.js --log-level=warning --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\""
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "marked": "^12.0.2"
+    "marked": "^12.0.2",
+    "esbuild": "^0.21.5"
   }
 }

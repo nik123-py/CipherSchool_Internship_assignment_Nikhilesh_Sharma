@@ -14,3 +14,4 @@ coverage/
 # Generated PDF intermediates (the PDFs themselves are kept, so a reviewer
 # browsing the repo can read the notes without building them).
 submission/*.html
+api/_app.js
