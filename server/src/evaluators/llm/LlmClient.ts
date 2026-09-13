@@ -40,6 +40,28 @@ export type AnthropicAuthScheme = 'x-api-key' | 'bearer';
  */
 const RELAY_USER_AGENT = 'claude-cli/2.1.158 (external, sdk-cli)';
 
+/**
+ * The rest of the Claude Code wire image. The User-Agent alone is enough to
+ * get a reply from a residential address, but the same request from a
+ * datacentre IP is met with an HTML challenge page, so a relay gets the whole
+ * shape rather than the minimum that happened to work from a laptop.
+ */
+function relayHeaders(): Record<string, string> {
+  return {
+    'user-agent': RELAY_USER_AGENT,
+    accept: 'application/json',
+    'x-app': 'cli',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
+    'x-stainless-lang': 'js',
+    'x-stainless-package-version': '0.60.0',
+    'x-stainless-os': 'Linux',
+    'x-stainless-arch': 'x64',
+    'x-stainless-runtime': 'node',
+    'x-stainless-runtime-version': process.versions.node,
+    'x-stainless-retry-count': '0',
+  };
+}
+
 export class AnthropicClient implements LlmClient {
   readonly id: string;
   readonly label: string;
@@ -69,7 +91,7 @@ export class AnthropicClient implements LlmClient {
         ...(this.authScheme === 'bearer'
           ? { authorization: `Bearer ${this.apiKey}` }
           : { 'x-api-key': this.apiKey }),
-        ...(hostOf(this.baseUrl) ? { 'user-agent': RELAY_USER_AGENT } : {}),
+        ...(hostOf(this.baseUrl) ? relayHeaders() : {}),
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
@@ -85,6 +107,19 @@ export class AnthropicClient implements LlmClient {
       throw new EvaluationFailedError(
         `Anthropic API returned ${response.status}: ${truncateBody(await safeText(response))}`,
         response.status >= 500 || response.status === 429,
+      );
+    }
+
+    // A relay that decides it does not like the caller answers 200 with an
+    // HTML challenge page. Parsing that as JSON reports a syntax error about a
+    // '<' character, which says nothing about what actually happened.
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('json')) {
+      const preview = truncateBody(await safeText(response));
+      throw new EvaluationFailedError(
+        `${hostOf(this.baseUrl) ?? 'The API'} replied with ${contentType || 'an unknown content type'} instead of JSON, ` +
+          `which usually means a bot challenge or a block page rather than an API response: ${preview}`,
+        true,
       );
     }
 

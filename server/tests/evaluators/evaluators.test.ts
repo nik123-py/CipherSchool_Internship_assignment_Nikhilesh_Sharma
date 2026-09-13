@@ -284,7 +284,10 @@ describe('AnthropicClient authentication', () => {
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
       seenUrl = String(url);
       seen = (init.headers ?? {}) as Record<string, string>;
-      return new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }), { status: 200 });
+      return new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     });
     return { headers: () => seen, url: () => seenUrl };
   }
@@ -314,6 +317,17 @@ describe('AnthropicClient authentication', () => {
     const captured = captureHeaders();
     await call(new AnthropicClient('k', 'glm-5.3', 'https://agentrouter.org', 'bearer'));
     expect(captured.headers()['user-agent']).toMatch(/^claude-cli\//);
+  });
+
+  it('calls an HTML challenge page what it is, rather than a JSON syntax error', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response('<!doctype html><html><body>Just a moment...</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      }),
+    );
+    const client = new AnthropicClient('k', 'glm-5.3', 'https://agentrouter.org', 'bearer');
+    await expect(call(client)).rejects.toThrow(/instead of JSON.*bot challenge|challenge or a block page/);
   });
 
   it('names the relay in the label but not in the recorded id', () => {
